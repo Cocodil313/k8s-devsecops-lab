@@ -1,0 +1,3 @@
+---
+cilium_version: ""
+cilium_namespace: "kube-system"

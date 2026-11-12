@@ -1,0 +1,73 @@
+---
+- name: Ajouter le depot Helm Kyverno
+  ansible.builtin.command: helm repo add kyverno https://kyverno.github.io/kyverno --force-update
+  changed_when: false
+
+- name: Rafraichir l index
+  ansible.builtin.command: helm repo update kyverno
+  changed_when: false
+
+- name: Creer le dossier des values
+  ansible.builtin.file:
+    path: /home/vagrant/lab-bootstrap/kyverno
+    state: directory
+    owner: vagrant
+    group: vagrant
+    mode: "0755"
+
+- name: Ecrire les values
+  ansible.builtin.template:
+    src: values.yaml.j2
+    dest: /home/vagrant/lab-bootstrap/kyverno/values.yaml
+    owner: vagrant
+    group: vagrant
+    mode: "0644"
+
+# --server-side : les CRD Kyverno depassent la limite d annotation du
+# client-side apply.
+- name: Deployer Kyverno
+  ansible.builtin.command: >-
+    helm upgrade kyverno kyverno/kyverno
+    --install=true
+    --namespace {{ kyverno_namespace }}
+    --create-namespace
+    {% if kyverno_chart_version %}--version {{ kyverno_chart_version }}{% endif %}
+    --values /home/vagrant/lab-bootstrap/kyverno/values.yaml
+    --server-side=true
+    --timeout 10m
+  register: helm_out
+  changed_when: "'has been installed' in helm_out.stdout or 'has been upgraded' in helm_out.stdout"
+
+- name: Attendre les controleurs
+  ansible.builtin.command: >-
+    kubectl -n {{ kyverno_namespace }} rollout status deploy/{{ item }} --timeout=300s
+  loop:
+    - kyverno-admission-controller
+    - kyverno-background-controller
+    - kyverno-cleanup-controller
+    - kyverno-reports-controller
+  changed_when: false
+
+- name: Attendre que la CRD soit servie
+  ansible.builtin.command: >-
+    kubectl wait --for=condition=Established --timeout=120s
+    crd/validatingpolicies.policies.kyverno.io
+  changed_when: false
+
+- name: Appliquer les policies
+  ansible.builtin.command: kubectl apply -f /home/vagrant/ansible/roles/kyverno/files/policies.yaml
+  register: pol
+  changed_when: "'created' in pol.stdout or 'configured' in pol.stdout"
+
+- name: Laisser Kyverno compiler
+  ansible.builtin.pause:
+    seconds: 10
+
+- name: Etat des policies
+  ansible.builtin.command: kubectl get validatingpolicy
+  register: list
+  changed_when: false
+
+- name: Rapport
+  ansible.builtin.debug:
+    msg: "{{ list.stdout_lines }}"

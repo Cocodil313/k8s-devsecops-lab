@@ -1,0 +1,7 @@
+---
+- name: Ping des 3 noeuds
+  hosts: k8s
+  gather_facts: false
+  tasks:
+    - name: Ping
+      ansible.builtin.ping:

@@ -1,0 +1,13 @@
+[Unit]
+Description=Port-forward Grafana vers localhost:{{ grafana_host_port }}
+After=k3s.service network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml \
+  -n {{ monitoring_namespace }} port-forward svc/grafana {{ grafana_host_port }}:80 --address 0.0.0.0
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

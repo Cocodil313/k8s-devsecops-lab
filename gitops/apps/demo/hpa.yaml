@@ -1,0 +1,38 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: demo-app
+  namespace: demo
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: demo-app
+  # min 2 : conserve la redondance entre les 2 workers au repos.
+  # max 5 : repartition 3/2 avec maxSkew 1. Memoire : 5 x 64Mi de limits.
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # 30 pourcent des requests. Avec requests.cpu 50m, le seuil est a
+          # 15m par pod : atteignable par une charge HTTP reelle.
+          averageUtilization: 30
+  # Sans behavior, le HPA monte et descend toutes les 15 s et provoque des
+  # rollouts inutiles.
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 30

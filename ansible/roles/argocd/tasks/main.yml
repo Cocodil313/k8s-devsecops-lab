@@ -1,0 +1,91 @@
+---
+- name: Ajouter le depot Helm Argo
+  ansible.builtin.command: helm repo add argo https://argoproj.github.io/argo-helm --force-update
+  changed_when: false
+
+- name: Rafraichir l index
+  ansible.builtin.command: helm repo update argo
+  changed_when: false
+
+- name: Creer le dossier des values
+  ansible.builtin.file:
+    path: /home/vagrant/lab-bootstrap/argocd
+    state: directory
+    owner: vagrant
+    group: vagrant
+    mode: "0755"
+
+- name: Ecrire les values
+  ansible.builtin.template:
+    src: values.yaml.j2
+    dest: /home/vagrant/lab-bootstrap/argocd/values.yaml
+    owner: vagrant
+    group: vagrant
+    mode: "0644"
+
+# --server-side OBLIGATOIRE : les CRD d Argo CD depassent la limite de
+# 256 Ko d annotation du client-side apply.
+- name: Deployer Argo CD
+  ansible.builtin.command: >-
+    helm upgrade argocd argo/argo-cd
+    --install=true
+    --namespace {{ argocd_namespace }}
+    --create-namespace
+    {% if argocd_chart_version %}--version {{ argocd_chart_version }}{% endif %}
+    --values /home/vagrant/lab-bootstrap/argocd/values.yaml
+    --server-side=true
+    --timeout 10m
+  register: helm_out
+  changed_when: "'has been installed' in helm_out.stdout or 'has been upgraded' in helm_out.stdout"
+
+- name: Attendre argocd-server
+  ansible.builtin.command: kubectl -n {{ argocd_namespace }} rollout status deploy/argocd-server --timeout=300s
+  changed_when: false
+
+- name: Attendre argocd-repo-server
+  ansible.builtin.command: kubectl -n {{ argocd_namespace }} rollout status deploy/argocd-repo-server --timeout=300s
+  changed_when: false
+
+- name: Attendre argocd-application-controller
+  ansible.builtin.shell: |
+    set -o pipefail
+    if kubectl -n {{ argocd_namespace }} get statefulset argocd-application-controller >/dev/null 2>&1; then
+      kubectl -n {{ argocd_namespace }} rollout status statefulset/argocd-application-controller --timeout=300s
+    else
+      kubectl -n {{ argocd_namespace }} rollout status deploy/argocd-application-controller --timeout=300s
+    fi
+  changed_when: false
+
+- name: Ecrire l unite de port-forward
+  ansible.builtin.template:
+    src: pf-argocd.service.j2
+    dest: /etc/systemd/system/pf-argocd.service
+    mode: "0644"
+  register: pf
+
+- name: Recharger systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: pf.changed
+
+- name: Activer le tunnel
+  ansible.builtin.systemd:
+    name: pf-argocd
+    enabled: true
+    state: restarted
+
+- name: Attendre le tunnel
+  ansible.builtin.pause:
+    seconds: 5
+
+- name: Verifier que le port ecoute
+  ansible.builtin.shell: |
+    set -o pipefail
+    ss -tlnp | grep -q ':{{ argocd_host_port }}' && echo OK || echo KO
+  register: check
+  changed_when: false
+
+- name: Echec si le tunnel n ecoute pas
+  ansible.builtin.assert:
+    that: check.stdout is search('OK')
+    fail_msg: "Port {{ argocd_host_port }} absent : journalctl -u pf-argocd -n 30"

@@ -1,0 +1,64 @@
+# {{ ansible_managed }}
+# modern_ebpf : sonde eBPF compilee dans le noyau (kernel >= 5.8 requis).
+# Debian 13 = kernel 6.12, donc aucun module a compiler, aucun header requis.
+driver:
+  kind: modern_ebpf
+
+# Pas de falcosidekick : il faudrait un backend de logs centralise.
+falcosidekick:
+  enabled: false
+
+resources:
+  requests: { cpu: 100m, memory: 128Mi }
+  limits:   { memory: 512Mi }
+
+# Le chart ne charge que 25 regles "stable". Les regles de detection de
+# conteneurs ont ete deplacees vers les depots incubating/sandbox et ne sont
+# donc PAS chargees. Sans ces 4 regles, un conteneur compromis passe inapercu.
+customRules:
+  lab-rules.yaml: |-
+    - rule: Lab Package Management in Container
+      desc: Execution d un gestionnaire de paquets dans un conteneur.
+      condition: >
+        spawned_process and container
+        and proc.name in (apt, apt-get, aptitude, dpkg, yum, dnf, rpm, apk, pip, pip3, npm)
+      output: >
+        Package management process in container
+        (user=%user.name container=%container.name image=%container.image.repository
+         proc=%proc.name cmdline=%proc.cmdline)
+      priority: WARNING
+      tags: [lab, supply-chain]
+
+    - rule: Lab Write Below Etc
+      desc: Ecriture sous /etc depuis un conteneur (tentative de persistance).
+      condition: >
+        open_write and container
+        and fd.name startswith /etc
+        and not proc.name in (dpkg, apt, apt-get, apk, rpm, yum, dnf)
+      output: >
+        File written below /etc
+        (user=%user.name container=%container.name file=%fd.name proc=%proc.name)
+      priority: WARNING
+      tags: [lab, persistence]
+
+    - rule: Lab Crypto Miner Binary
+      desc: Execution d un binaire de minage dans un conteneur.
+      condition: >
+        spawned_process and container
+        and proc.name in (xmrig, minerd, cpuminer, ethminer, nbminer)
+      output: >
+        Crypto miner started
+        (user=%user.name container=%container.name proc=%proc.name cmdline=%proc.cmdline)
+      priority: CRITICAL
+      tags: [lab, cryptomining]
+
+    - rule: Lab Netcat In Container
+      desc: Execution de netcat ou socat dans un conteneur (reverse shell).
+      condition: >
+        spawned_process and container
+        and proc.name in (nc, ncat, netcat, socat)
+      output: >
+        Netcat-like tool in container
+        (user=%user.name container=%container.name proc=%proc.name cmdline=%proc.cmdline)
+      priority: WARNING
+      tags: [lab, reverse-shell]

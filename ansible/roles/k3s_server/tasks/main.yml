@@ -1,0 +1,77 @@
+---
+- name: Creer /etc/rancher/k3s
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    mode: "0755"
+
+- name: Ecrire la configuration du serveur
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    mode: "0600"
+  register: k3s_cfg
+
+# creates : le module shell devient idempotent, pas besoin de when.
+- name: Installer K3s server
+  ansible.builtin.shell: |
+    set -o pipefail
+    curl -sfL https://get.k3s.io | INSTALL_K3S_CHANNEL={{ k3s_channel }} sh -s - server
+  args:
+    executable: /bin/bash
+    creates: /usr/local/bin/k3s
+  register: k3s_install
+
+- name: Redemarrer k3s si la configuration a change
+  ansible.builtin.systemd:
+    name: k3s
+    state: restarted
+  when:
+    - k3s_cfg.changed
+    - not k3s_install.changed
+
+- name: Activer et demarrer k3s
+  ansible.builtin.systemd:
+    name: k3s
+    enabled: true
+    state: started
+
+- name: Attendre l API
+  ansible.builtin.command: k3s kubectl get --raw /readyz
+  register: api
+  until: api.rc == 0
+  retries: 60
+  delay: 2
+  changed_when: false
+
+- name: Creer ~/.kube
+  ansible.builtin.file:
+    path: /home/vagrant/.kube
+    state: directory
+    owner: vagrant
+    group: vagrant
+    mode: "0700"
+
+- name: Copier le kubeconfig
+  ansible.builtin.copy:
+    src: /etc/rancher/k3s/k3s.yaml
+    dest: /home/vagrant/.kube/config
+    remote_src: true
+    owner: vagrant
+    group: vagrant
+    mode: "0600"
+
+- name: Exporter KUBECONFIG
+  ansible.builtin.copy:
+    dest: /etc/profile.d/kube.sh
+    mode: "0644"
+    content: |
+      export KUBECONFIG=/home/vagrant/.kube/config
+      alias k=kubectl
+
+- name: Appliquer le taint du control plane
+  ansible.builtin.command: >-
+    k3s kubectl taint node {{ inventory_hostname }}
+    node-role.kubernetes.io/control-plane=:NoSchedule --overwrite
+  changed_when: false
+  failed_when: false

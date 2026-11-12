@@ -1,0 +1,7 @@
+---
+# Composant de bootstrap : Argo CD a besoin du reseau pour demarrer.
+- name: Cilium
+  hosts: master
+  become: true
+  roles:
+    - cilium

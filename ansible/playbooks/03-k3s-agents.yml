@@ -1,0 +1,25 @@
+---
+# Le token n est jamais dans le depot : K3s le genere sur le master,
+# Ansible le lit avec slurp + no_log et l injecte dans la config des agents.
+- name: Lire le token genere par le control plane
+  hosts: master
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Slurp du node-token
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: token_raw
+      no_log: true
+    - name: Exposer le token aux workers
+      ansible.builtin.set_fact:
+        k3s_token: "{{ token_raw.content | b64decode | trim }}"
+      no_log: true
+
+- name: Agents K3s
+  hosts: workers
+  become: true
+  vars:
+    k3s_token: "{{ hostvars['k8s-master'].k3s_token }}"
+  roles:
+    - k3s_agent

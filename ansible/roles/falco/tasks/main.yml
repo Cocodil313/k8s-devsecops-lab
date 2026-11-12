@@ -1,0 +1,67 @@
+---
+- name: Ajouter le depot Helm Falco
+  ansible.builtin.command: helm repo add falcosecurity https://falcosecurity.github.io/charts --force-update
+  changed_when: false
+
+- name: Rafraichir l index
+  ansible.builtin.command: helm repo update falcosecurity
+  changed_when: false
+
+- name: Creer le dossier des values
+  ansible.builtin.file:
+    path: /home/vagrant/lab-bootstrap/falco
+    state: directory
+    owner: vagrant
+    group: vagrant
+    mode: "0755"
+
+- name: Ecrire les values
+  ansible.builtin.template:
+    src: values.yaml.j2
+    dest: /home/vagrant/lab-bootstrap/falco/values.yaml
+    owner: vagrant
+    group: vagrant
+    mode: "0644"
+
+- name: Deployer Falco
+  ansible.builtin.command: >-
+    helm upgrade falco falcosecurity/falco
+    --install=true
+    --namespace {{ falco_namespace }}
+    --create-namespace
+    {% if falco_chart_version %}--version {{ falco_chart_version }}{% endif %}
+    --values /home/vagrant/lab-bootstrap/falco/values.yaml
+    --timeout 10m
+  register: helm_out
+  changed_when: "'has been installed' in helm_out.stdout or 'has been upgraded' in helm_out.stdout"
+
+- name: Attendre le DaemonSet
+  ansible.builtin.command: kubectl -n {{ falco_namespace }} rollout status ds/falco --timeout=300s
+  changed_when: false
+
+# Sans la sonde chargee, Falco tourne mais ne voit rien : le pod est Ready et
+# silencieux, ce qui donne un faux sentiment de securite.
+- name: Verifier que la sonde eBPF est chargee
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubectl -n {{ falco_namespace }} logs ds/falco --tail=200 | grep -qiE 'modern_ebpf|bpf probe|Falco initialized'
+  register: probe
+  until: probe.rc == 0
+  retries: 20
+  delay: 10
+  changed_when: false
+  failed_when: false
+
+- name: Echec si la sonde n est pas chargee
+  ansible.builtin.assert:
+    that: probe.rc == 0
+    fail_msg: "Sonde Falco non chargee. Essayer driver.kind: kmod dans values.yaml.j2"
+
+- name: Nombre de pods
+  ansible.builtin.command: kubectl -n {{ falco_namespace }} get pods --no-headers
+  register: pods
+  changed_when: false
+
+- name: Rapport
+  ansible.builtin.debug:
+    msg: "{{ pods.stdout_lines }}"

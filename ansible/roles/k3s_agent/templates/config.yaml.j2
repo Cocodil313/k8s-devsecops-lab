@@ -1,0 +1,15 @@
+# {{ ansible_managed }}
+server: https://{{ lab_master_ip }}:6443
+token: {{ k3s_token }}
+
+# Sans node-ip, le noeud s enregistre avec l IP NAT et le trafic inter-noeuds
+# (kubelet, Cilium, scraping) part sur le mauvais reseau.
+node-ip: {{ lab_node_ip }}
+
+# Label pose A L ENREGISTREMENT : cible des nodeSelector.
+# role=infra ou role=app selon le noeud.
+node-label:
+  - role={{ node_role }}
+
+kubelet-arg:
+  - eviction-hard=memory.available<150Mi,nodefs.available<10%,imagefs.available<15%

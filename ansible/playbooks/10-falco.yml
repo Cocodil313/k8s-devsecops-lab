@@ -1,0 +1,6 @@
+---
+- name: Falco
+  hosts: master
+  become: true
+  roles:
+    - falco

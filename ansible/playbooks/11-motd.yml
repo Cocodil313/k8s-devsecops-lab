@@ -1,0 +1,6 @@
+---
+- name: MOTD
+  hosts: k8s
+  become: true
+  roles:
+    - motd

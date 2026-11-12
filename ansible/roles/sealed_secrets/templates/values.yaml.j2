@@ -1,0 +1,9 @@
+# {{ ansible_managed }}
+# Le Deployment doit s appeler sealed-secrets-controller : c est le nom que
+# kubeseal interroge par defaut. Sans cet override, kubeseal echoue sur
+# services sealed-secrets-controller not found.
+fullnameOverride: sealed-secrets-controller
+
+resources:
+  requests: { cpu: 10m, memory: 32Mi }
+  limits:   { memory: 128Mi }

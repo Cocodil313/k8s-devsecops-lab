@@ -1,0 +1,7 @@
+.vagrant/
+keys/
+*.BACKUP.yaml
+*.log
+*.txt
+*.bak
+.DS_Store

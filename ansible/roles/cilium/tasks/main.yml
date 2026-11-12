@@ -1,0 +1,74 @@
+---
+# --force-update rend la commande idempotente, sans dependre du texte exact
+# du message already exists (qui differe entre helm 3 et helm 4).
+- name: Ajouter le depot Helm Cilium
+  ansible.builtin.command: helm repo add cilium https://helm.cilium.io/ --force-update
+  changed_when: false
+
+- name: Rafraichir l index
+  ansible.builtin.command: helm repo update cilium
+  changed_when: false
+
+- name: Creer le dossier des values
+  ansible.builtin.file:
+    path: /home/vagrant/lab-bootstrap/cilium
+    state: directory
+    owner: vagrant
+    group: vagrant
+    mode: "0755"
+
+- name: Ecrire les values
+  ansible.builtin.template:
+    src: values.yaml.j2
+    dest: /home/vagrant/lab-bootstrap/cilium/values.yaml
+    owner: vagrant
+    group: vagrant
+    mode: "0644"
+
+# Arguments positionnels AVANT les flags : helm 4 consomme le premier
+# positionnel apres --install et echoue avec requires 2 arguments.
+# Pas de --wait : hubble-relay ne peut pas etre ordonnance avant que les
+# noeuds soient Ready, et les noeuds ne sont Ready qu apres cilium-agent.
+- name: Deployer Cilium
+  ansible.builtin.command: >-
+    helm upgrade cilium cilium/cilium
+    --install=true
+    --namespace {{ cilium_namespace }}
+    {% if cilium_version %}--version {{ cilium_version }}{% endif %}
+    --values /home/vagrant/lab-bootstrap/cilium/values.yaml
+  register: helm_out
+  changed_when: "'has been installed' in helm_out.stdout or 'has been upgraded' in helm_out.stdout"
+
+- name: Attendre le DaemonSet cilium
+  ansible.builtin.command: kubectl -n {{ cilium_namespace }} rollout status ds/cilium --timeout=300s
+  register: ds
+  changed_when: false
+  failed_when: false
+
+- name: Attendre l ecriture de la conf CNI
+  ansible.builtin.wait_for:
+    path: /etc/cni/net.d/05-cilium.conflist
+    timeout: 300
+
+# containerd lit sa conf CNI au demarrage. Si Cilium ecrit le fichier APRES,
+# le runtime reste sur cni plugin not initialized indefiniment.
+- name: Attendre que les noeuds soient Ready
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubectl get nodes --no-headers | grep -c ' Ready '
+  register: ready
+  until: ready.stdout | int >= 1
+  retries: 60
+  delay: 5
+  changed_when: false
+
+- name: Redemarrer k3s si le runtime n a pas charge la conf
+  ansible.builtin.systemd:
+    name: k3s
+    state: restarted
+  when: ready.stdout | int < 1
+
+- name: Rapport
+  ansible.builtin.command: cilium status
+  changed_when: false
+  failed_when: false

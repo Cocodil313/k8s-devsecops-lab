@@ -1,0 +1,36 @@
+# {{ ansible_managed }}
+# node-ip OBLIGATOIRE avec 2 cartes reseau. Sans cette ligne, K3s choisit
+# l IP NAT (10.0.2.15) et les agents ne peuvent jamais joindre l API.
+node-ip: {{ lab_master_ip }}
+advertise-address: {{ lab_master_ip }}
+
+# tls-san : noms et IPs supplementaires dans le certificat de l API.
+tls-san:
+  - {{ lab_master_ip }}
+  - 127.0.0.1
+
+write-kubeconfig-mode: "0644"
+
+# Aucun CNI fourni par K3s : Cilium prend le relais.
+flannel-backend: none
+# Cilium remplace kube-proxy en eBPF.
+disable-kube-proxy: true
+# Cilium gere les NetworkPolicy.
+disable-network-policy: true
+
+# Chiffrement au repos des Secrets : un fichier de base vole reste illisible.
+secrets-encryption: true
+
+disable:
+  - traefik
+  - servicelb
+
+# Eviction propre plutot qu un noeud fige (un seul disque dans ce labo).
+kubelet-arg:
+  - eviction-hard=memory.available<150Mi,nodefs.available<10%,imagefs.available<15%
+
+# Taint du control plane : K3s ne le pose PAS par defaut, contrairement a
+# kubeadm. Sans lui, un Deployment sans toleration peut atterrir sur le master.
+# Les DaemonSets tolerent tout et continuent d y tourner, c est voulu.
+node-taint:
+  - "node-role.kubernetes.io/control-plane:NoSchedule"

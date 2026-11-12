@@ -1,0 +1,45 @@
+# {{ ansible_managed }}
+nodeSelector:
+  role: infra
+
+persistence:
+  enabled: false
+
+adminUser: admin
+adminPassword: {{ grafana_admin_password }}
+
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits:   { memory: 256Mi }
+
+# VictoriaMetrics est 100 pourcent compatible PromQL : Grafana utilise le
+# plugin Prometheus natif, aucune difference visible.
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: VictoriaMetrics
+        type: prometheus
+        access: proxy
+        url: http://vm-victoria-metrics-single-server.{{ monitoring_namespace }}.svc.cluster.local:8428
+        isDefault: true
+        jsonData:
+          timeInterval: 30s
+
+# Le provider scanne ce dossier au demarrage. Le dashboard vit dans Git,
+# il survit donc a un destroy.
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: lab
+        orgId: 1
+        folder: Lab
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/lab
+
+dashboardsConfigMaps:
+  lab: grafana-lab-dashboards

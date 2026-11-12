@@ -1,0 +1,41 @@
+# {{ ansible_managed }}
+global:
+  # Tous les composants sur worker-1 (label role=infra).
+  nodeSelector:
+    role: infra
+
+configs:
+  params:
+    # OBLIGATOIRE pour http://localhost:8080 en HTTP simple. Sans cette cle,
+    # argocd-server repond 307 vers HTTPS et le navigateur affiche
+    # ERR_SSL_PROTOCOL_ERROR.
+    server.insecure: true
+
+# Composants desactives : environ 250 Mo de RAM economises.
+dex:
+  enabled: false
+applicationSet:
+  enabled: false
+notifications:
+  enabled: false
+
+server:
+  replicas: 1
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { memory: 256Mi }
+
+controller:
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { memory: 512Mi }
+
+repoServer:
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { memory: 256Mi }
+
+redis:
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits:   { memory: 128Mi }

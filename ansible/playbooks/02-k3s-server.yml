@@ -1,0 +1,6 @@
+---
+- name: Control plane K3s
+  hosts: master
+  become: true
+  roles:
+    - k3s_server

@@ -1,0 +1,77 @@
+---
+# Le kubelet refuse de demarrer avec du swap actif : les requests/limits
+# n auraient plus de sens si le noyau pouvait swapper un pod garanti.
+- name: Desactiver le swap
+  ansible.builtin.command: swapoff -a
+  changed_when: false
+  failed_when: false
+
+- name: Commenter la ligne swap de fstab
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '^([^#].*\sswap\s.*)$'
+    replace: '# \1'
+
+# overlay : storage driver de containerd.
+# br_netfilter : rend le trafic bridge visible d iptables (Services K8s).
+# nf_conntrack et iptable_nat : prerequis eBPF de Cilium.
+- name: Declarer les modules au boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/k8s.conf
+    mode: "0644"
+    content: |
+      overlay
+      br_netfilter
+      nf_conntrack
+      iptable_nat
+      iptable_filter
+
+- name: Charger les modules
+  ansible.builtin.command: "modprobe {{ item }}"
+  loop: [overlay, br_netfilter, nf_conntrack, iptable_nat, iptable_filter]
+  changed_when: false
+  failed_when: false
+
+# ip_forward : routage Pod a Pod et Pod vers Internet.
+# bridge-nf-call-iptables : iptables voit le trafic bridge.
+# overcommit_memory : K3s reserve la memoire virtuelle sans refus.
+# inotify : evite too many open files (Cilium, Falco, Grafana).
+- name: Appliquer les sysctl
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-k8s.conf
+    mode: "0644"
+    content: |
+      net.bridge.bridge-nf-call-iptables  = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.ipv4.ip_forward                 = 1
+      vm.overcommit_memory                = 1
+      vm.panic_on_oom                     = 0
+      kernel.panic                        = 10
+      fs.inotify.max_user_instances       = 8192
+      fs.inotify.max_user_watches         = 524288
+  notify: reload sysctl
+
+# Aucun DNS interne : K3s et Ansible resolvent les 3 noms par /etc/hosts.
+- name: Resolution inter-VM
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} LAB K8S"
+    block: |
+      192.168.56.10 k8s-master   k8s-master.lab.local
+      192.168.56.11 k8s-worker-1 k8s-worker-1.lab.local
+      192.168.56.12 k8s-worker-2 k8s-worker-2.lab.local
+
+- name: Installer les paquets de base
+  ansible.builtin.apt:
+    name: "{{ k8s_base_packages }}"
+    state: present
+
+- name: Fuseau horaire
+  ansible.builtin.timezone:
+    name: "{{ lab_timezone }}"
+
+- name: Ecrire le role du noeud
+  ansible.builtin.copy:
+    dest: /etc/lab-role
+    mode: "0644"
+    content: "{{ node_role }}\n"

@@ -1,0 +1,31 @@
+# {{ ansible_managed }}
+# 1 replique par controleur : le defaut est 3 pour l admission, ce qui
+# couterait 300 Mo de plus pour zero benefice sur un labo.
+admissionController:
+  replicas: 1
+  nodeSelector:
+    role: infra
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { memory: 384Mi }
+
+backgroundController:
+  nodeSelector:
+    role: infra
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits:   { memory: 192Mi }
+
+cleanupController:
+  nodeSelector:
+    role: infra
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits:   { memory: 128Mi }
+
+reportsController:
+  nodeSelector:
+    role: infra
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits:   { memory: 192Mi }

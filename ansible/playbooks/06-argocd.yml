@@ -1,0 +1,6 @@
+---
+- name: Argo CD
+  hosts: master
+  become: true
+  roles:
+    - argocd

@@ -1,0 +1,18 @@
+[Unit]
+Description=Port-forward Argo CD UI vers localhost:{{ argocd_host_port }}
+After=k3s.service network-online.target
+Wants=network-online.target
+
+[Service]
+# --address 0.0.0.0 : sans lui, kubectl ecoute sur 127.0.0.1 dans la VM et le
+# NAT VirtualBox ne voit pas le port.
+# --kubeconfig explicite : systemd ne charge pas /etc/profile.d.
+ExecStart=/usr/local/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml \
+  -n {{ argocd_namespace }} port-forward svc/argocd-server {{ argocd_host_port }}:80 --address 0.0.0.0
+# Le pod argocd-server est recree a chaque upgrade ou eviction, ce qui tue
+# le tunnel. systemd le relance en 5 s.
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

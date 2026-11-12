@@ -1,0 +1,60 @@
+# {{ ansible_managed }}
+# Remplacement de kube-proxy : Services implementes en eBPF dans le noyau.
+kubeProxyReplacement: true
+
+# OBLIGATOIRE sans kube-proxy : l agent ne peut plus resoudre le Service
+# "kubernetes". Il doit joindre l API par son IP reelle (celle du tls-san).
+k8sServiceHost: {{ lab_master_ip }}
+k8sServicePort: 6443
+
+bpf:
+  # SNAT du trafic pod vers Internet (sortie via le NAT VirtualBox).
+  masquerade: true
+
+# Envoy embarque dans chaque agent : prerequis des policies L7.
+l7Proxy: true
+
+ipv4:
+  enabled: true
+ipv6:
+  enabled: false
+
+# VXLAN : encapsule le trafic inter-noeuds, pas besoin du meme L2.
+routingMode: tunnel
+tunnelProtocol: vxlan
+
+# Le defaut du chart est 10.0.0.0/8, qui CONTIENT le NAT VirtualBox
+# (10.0.2.0/24) : pods injoignables de facon intermittente.
+ipam:
+  mode: cluster-pool
+  operator:
+    clusterPoolIPv4PodCIDRList:
+      - 10.42.0.0/16
+    clusterPoolIPv4MaskSize: 24
+
+# Chemins CNI reels du CRI de K3s 1.37. Verifiable avec k3s crictl info.
+# Avec les chemins historiques (data/current/bin), cilium-cni est depose
+# la ou containerd ne le cherche pas et les noeuds restent NotReady.
+cni:
+  binPath: /opt/cni/bin
+  confPath: /etc/cni/net.d
+
+operator:
+  replicas: 1
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits:   { memory: 256Mi }
+
+hubble:
+  enabled: true
+  relay:
+    enabled: true
+    # Le relay demarre meme si un noeud est encore NotReady.
+    tolerations:
+      - operator: Exists
+  ui:
+    enabled: false
+
+resources:
+  requests: { cpu: 100m, memory: 128Mi }
+  limits:   { memory: 512Mi }

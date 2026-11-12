@@ -1,0 +1,6 @@
+---
+- name: Bastion d administration
+  hosts: master
+  become: true
+  roles:
+    - bastion

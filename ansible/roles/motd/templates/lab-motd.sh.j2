@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# {{ ansible_managed }}
+# Banniere de connexion. ~0.8 s, aucun service, kubectl borne a 3 s.
+set -uo pipefail
+
+if [ -t 1 ]; then
+  RST=$'\e[0m'; BLD=$'\e[1m'; DIM=$'\e[2m'
+  RED=$'\e[31m'; GRN=$'\e[32m'; YEL=$'\e[33m'; CYA=$'\e[36m'; MAG=$'\e[35m'
+else
+  RST=; BLD=; DIM=; RED=; GRN=; YEL=; CYA=; MAG=
+fi
+
+hdr() { printf '\n%s== %s %s%s\n' "$BLD$CYA" "$1" "----------------------------------------" "$RST"; }
+pct() { awk -v u="$1" -v t="$2" 'BEGIN{ if (t+0<=0){print 0; exit} printf "%d", (u*100)/t }'; }
+clr() { if [ "$1" -ge 90 ]; then printf '%s' "$RED"; elif [ "$1" -ge 70 ]; then printf '%s' "$YEL"; else printf '%s' "$GRN"; fi; }
+
+kc() {
+  sudo -n true 2>/dev/null || return 1
+  sudo -n k3s kubectl --request-timeout=3s "$@" 2>/dev/null
+}
+
+ROLE=$(cat /etc/lab-role 2>/dev/null || echo "non defini")
+[ -r /etc/os-release ] && . /etc/os-release
+printf '\n%s  LAB DEVSECOPS K8S  ·  %s%s\n' "$BLD$MAG" "$(hostname -f 2>/dev/null || hostname)" "$RST"
+hdr "IDENTITE"
+printf '  %-8s %s\n' "Role"   "$ROLE"
+printf '  %-8s %s\n' "OS"     "${PRETTY_NAME:-inconnu}"
+printf '  %-8s %s\n' "Noyau"  "$(uname -r)"
+printf '  %-8s %s\n' "Uptime" "$(uptime -p 2>/dev/null | sed 's/^up //')"
+
+hdr "RESEAU"
+while read -r iface cidr; do
+  case "$iface" in
+    eth0|enp0s3)        label="NAT VirtualBox" ;;
+    eth1|enp0s8|enp0s9) label="host-only labo" ;;
+    *)                  label="" ;;
+  esac
+  printf '  %-6s %-18s %s%s%s\n' "$iface" "$cidr" "$DIM" "$label" "$RST"
+done < <(ip -4 -o addr show scope global 2>/dev/null | awk '{print $2, $4}')
+
+hdr "RESSOURCES"
+read -r _t _u _f _s _c _a < <(free -m | awk '/^Mem:/{print $2,$3,$4,$5,$6,$7}')
+real=$((_t - _a)); p=$(pct "$real" "$_t"); c=$(clr "$p")
+printf '  %-8s %s%s/%s Mo (%s%%)%s\n' "RAM" "$c" "$real" "$_t" "$p" "$RST"
+printf '  %-8s %s vCPU  load %s\n' "CPU" "$(nproc)" "$(cut -d' ' -f1-3 /proc/loadavg)"
+read -r size used pc < <(df -h --output=size,used,pcent / 2>/dev/null | tail -1)
+printf '  %-8s %s%s / %s (%s)%s\n' "Disque" "$(clr "${pc%\%}")" "$used" "$size" "$pc" "$RST"
+
+hdr "SERVICES"
+for u in ssh k3s k3s-agent containerd falco pf-argocd pf-grafana; do
+  systemctl cat "${u}.service" >/dev/null 2>&1 || continue
+  st=$(systemctl is-active "${u}.service" 2>/dev/null)
+  case "$st" in
+    active)     dot="${GRN}o${RST}" ;;
+    activating) dot="${YEL}.${RST}" ;;
+    failed)     dot="${RED}x${RST}" ;;
+    *)          dot="${DIM}.${RST}" ;;
+  esac
+  printf '  %s %-16s %s\n' "$dot" "$u" "$st"
+done
+
+NODES=$(kc get nodes --no-headers 2>/dev/null)
+if [ -n "${NODES:-}" ]; then
+  hdr "CLUSTER"
+  printf '  %-14s %-9s %s\n' "NOEUD" "STATUT" "PODS"
+  while read -r name status _rest; do
+    pods=$(kc get pods -A --field-selector "spec.nodeName=$name" --no-headers 2>/dev/null | wc -l)
+    printf '  %-14s %-9s %s\n' "$name" "$status" "$pods"
+  done <<< "$NODES"
+
+  APPS=$(kc -n argocd get applications --no-headers 2>/dev/null)
+  if [ -n "${APPS:-}" ]; then
+    hdr "GITOPS"
+    printf '%s\n' "$APPS" | awk '{printf "  %-12s %-9s %s\n", $1, $2, $3}'
+  fi
+fi
+
+hdr "ACCES"
+printf '  %-28s %s\n' "http://localhost:8080"  "Argo CD"
+printf '  %-28s %s\n' "http://localhost:3000"  "Grafana (admin / labadmin)"
+printf '  %-28s %s\n' "http://localhost:30080" "demo-app"
+
+printf '\n%s  k9s - kubectl get pods -A - lab-motd (relancer)%s\n\n' "$DIM" "$RST"

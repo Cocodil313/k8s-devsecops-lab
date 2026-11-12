@@ -1,0 +1,109 @@
+# Gitleaks -> Trivy FS -> build -> Trivy image (rapport) -> push GHCR -> bump
+#
+# 2 portes BLOQUANTES + 1 porte de RAPPORT.
+# Gitleaks et Trivy FS bloquent : un secret commite ou une misconfiguration
+# IaC sont des fautes corrigeables. Le scan d image rapporte sans bloquer :
+# les CVE de nginx et alpine ne dependent pas du code applicatif, et bloquer
+# dessus rend le pipeline rouge en permanence.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/ci.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE: ghcr.io/cocodil313/k8s-devsecops-lab
+
+jobs:
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Toute l histoire : un secret supprime au commit suivant reste
+          # dans l historique.
+          fetch-depth: 0
+      - name: Detecter les secrets
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
+            detect --source=/repo --verbose --redact --exit-code 1
+
+  trivy-fs:
+    name: Trivy FS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan fichiers et IaC
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+          format: table
+
+  build:
+    name: Build + Trivy image + Push
+    needs: [gitleaks, trivy-fs]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Calculer le tag
+        run: echo "TAG=${GITHUB_SHA::7}" >> $GITHUB_ENV
+      - uses: docker/setup-buildx-action@v3
+      - name: Login GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build
+        run: docker build -t "$IMAGE:$TAG" app/
+      - name: Scan de l image (rapport)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ env.TAG }}
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+          ignore-unfixed: true
+          format: table
+      - name: Push
+        run: docker push "$IMAGE:$TAG"
+      - name: Tag main
+        run: |
+          docker tag "$IMAGE:$TAG" "$IMAGE:main"
+          docker push "$IMAGE:main"
+
+  bump:
+    name: Bump tag GitOps
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mettre a jour kustomization.yaml
+        run: |
+          TAG=${GITHUB_SHA::7}
+          sed -i "s|newName:.*|newName: ${IMAGE}|" gitops/apps/demo/kustomization.yaml
+          sed -i "s|newTag:.*|newTag: \"${TAG}\"|" gitops/apps/demo/kustomization.yaml
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gitops/apps/demo/kustomization.yaml
+
+          if git diff --staged --quiet; then
+            echo "Aucun changement de tag"
+            exit 0
+          fi
+
+          git commit -m "chore(gitops): demo-app -> ${TAG}"
+          git push

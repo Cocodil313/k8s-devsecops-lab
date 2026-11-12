@@ -1,0 +1,6 @@
+---
+- name: Observabilite
+  hosts: master
+  become: true
+  roles:
+    - observability

@@ -1,0 +1,6 @@
+---
+- name: Kyverno
+  hosts: master
+  become: true
+  roles:
+    - kyverno

@@ -1,0 +1,57 @@
+---
+# Kyverno 1.20 supprime l execution des ClusterPolicy legacy (kyverno.io/v1).
+# Les ValidatingPolicy utilisent CEL, le meme moteur que les
+# ValidatingAdmissionPolicy natifs de Kubernetes.
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: disallow-latest-tag
+spec:
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+    # Sans ces exclusions, Kyverno bloquerait ses propres pods, ceux d Argo CD,
+    # de la stack metriques et de Falco.
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kube-system, kyverno, argocd, monitoring, falco]
+  validations:
+    - expression: "object.spec.containers.all(c, !c.image.endsWith(':latest'))"
+      message: "Tag d image explicite obligatoire (:latest interdit)."
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: require-resource-limits
+spec:
+  # Audit : signale sans bloquer. Le passage en Deny casserait le deploiement
+  # des charges existantes qui n ont pas encore de limits.
+  validationActions:
+    - Audit
+  evaluation:
+    background:
+      enabled: true
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kube-system, kyverno, argocd, monitoring, falco]
+  validations:
+    - expression: >-
+        object.spec.containers.all(c,
+          has(c.resources) && has(c.resources.limits) &&
+          'cpu' in c.resources.limits && 'memory' in c.resources.limits)
+      message: "CPU et memoire limits obligatoires."

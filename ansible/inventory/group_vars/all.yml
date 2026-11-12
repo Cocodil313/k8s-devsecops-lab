@@ -1,0 +1,22 @@
+---
+# "stable" suit la derniere release. Figer en "v1.37" pour une reproductibilite
+# totale entre deux sessions.
+k3s_channel: "stable"
+
+# IP du control plane : utilisee par les agents K3s ET par Cilium
+# (k8sServiceHost). Doit correspondre au tls-san du serveur.
+lab_master_ip: "192.168.56.10"
+
+lab_timezone: "Europe/Paris"
+
+# Cache APT rafraichi au plus une fois par fenetre et par VM.
+apt_cache_valid_time: 3600
+
+k8s_base_packages:
+  - curl
+  - ca-certificates
+  - jq
+  - iproute2
+  - vim
+  - less
+  - htop

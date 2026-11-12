@@ -1,0 +1,4 @@
+---
+sealed_namespace: "kube-system"
+sealed_chart_version: ""
+sealed_key_backup: "/home/vagrant/backups/sealed-secrets-key.yaml"

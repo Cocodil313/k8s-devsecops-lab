@@ -1,0 +1,185 @@
+---
+- name: Installer jq et gnupg
+  ansible.builtin.apt:
+    name: [jq, gnupg]
+    state: present
+
+- name: Resoudre les dernieres versions GitHub
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ item.repo }}/releases/latest"
+    return_content: true
+  loop:
+    - { tool: helm,     repo: "helm/helm" }
+    - { tool: trivy,    repo: "aquasecurity/trivy" }
+    - { tool: kubeseal, repo: "bitnami-labs/sealed-secrets" }
+  register: gh
+  retries: 3
+  delay: 5
+  until: gh is not failed
+
+- name: Construire le dictionnaire des versions
+  ansible.builtin.set_fact:
+    bver: >-
+      {{ dict(gh.results | map(attribute='item.tool')
+              | zip(gh.results | map(attribute='json.tag_name'))) }}
+
+# PIEGE : l installeur K3s cree /usr/local/bin/kubectl comme SYMLINK vers k3s.
+# curl -o suit le symlink et ecrase k3s : k3s server devient kubectl server.
+- name: Supprimer le symlink kubectl
+  ansible.builtin.file:
+    path: /usr/local/bin/kubectl
+    state: absent
+
+- name: Resoudre la version stable de kubectl
+  ansible.builtin.uri:
+    url: https://dl.k8s.io/release/stable.txt
+    return_content: true
+  register: kver
+
+- name: Installer kubectl
+  ansible.builtin.get_url:
+    url: "https://dl.k8s.io/release/{{ kver.content | trim }}/bin/linux/{{ bastion_arch }}/kubectl"
+    dest: /usr/local/bin/kubectl
+    mode: "0755"
+
+# Sans ce symlink, kubectl lance en root cherche /root/.kube/config qui
+# n existe pas (K3s ecrit dans /etc/rancher/k3s/k3s.yaml).
+- name: Creer /root/.kube
+  ansible.builtin.file:
+    path: /root/.kube
+    state: directory
+    mode: "0700"
+
+- name: Pointer le kubeconfig de root
+  ansible.builtin.file:
+    src: /etc/rancher/k3s/k3s.yaml
+    dest: /root/.kube/config
+    state: link
+    force: true
+
+- name: Telecharger helm
+  ansible.builtin.get_url:
+    url: "https://get.helm.sh/helm-{{ bver.helm }}-linux-{{ bastion_arch }}.tar.gz"
+    dest: /tmp/helm.tgz
+    mode: "0644"
+
+- name: Extraire helm
+  ansible.builtin.unarchive:
+    src: /tmp/helm.tgz
+    dest: /tmp
+    remote_src: true
+    creates: "/tmp/linux-{{ bastion_arch }}/helm"
+
+- name: Installer helm
+  ansible.builtin.copy:
+    src: "/tmp/linux-{{ bastion_arch }}/helm"
+    dest: /usr/local/bin/helm
+    remote_src: true
+    mode: "0755"
+
+- name: Telecharger k9s
+  ansible.builtin.get_url:
+    url: "https://github.com/derailed/k9s/releases/latest/download/k9s_Linux_{{ bastion_arch }}.tar.gz"
+    dest: /tmp/k9s.tgz
+    mode: "0644"
+
+- name: Extraire k9s
+  ansible.builtin.unarchive:
+    src: /tmp/k9s.tgz
+    dest: /tmp
+    remote_src: true
+    creates: /tmp/k9s
+
+- name: Installer k9s
+  ansible.builtin.copy:
+    src: /tmp/k9s
+    dest: /usr/local/bin/k9s
+    remote_src: true
+    mode: "0755"
+
+# Binaire seul plutot qu un depot APT : evite un apt-get update supplementaire.
+- name: Telecharger trivy
+  ansible.builtin.get_url:
+    url: "https://github.com/aquasecurity/trivy/releases/download/{{ bver.trivy }}/trivy_{{ bver.trivy | regex_replace('^v','') }}_Linux-{{ bastion_trivy_arch }}.tar.gz"
+    dest: /tmp/trivy.tgz
+    mode: "0644"
+
+- name: Extraire trivy
+  ansible.builtin.unarchive:
+    src: /tmp/trivy.tgz
+    dest: /tmp
+    remote_src: true
+    creates: /tmp/trivy
+
+- name: Installer trivy
+  ansible.builtin.copy:
+    src: /tmp/trivy
+    dest: /usr/local/bin/trivy
+    remote_src: true
+    mode: "0755"
+
+- name: Telecharger kubeseal
+  ansible.builtin.get_url:
+    url: "https://github.com/bitnami-labs/sealed-secrets/releases/download/{{ bver.kubeseal }}/kubeseal-{{ bver.kubeseal | regex_replace('^v','') }}-linux-{{ bastion_arch }}.tar.gz"
+    dest: /tmp/kubeseal.tgz
+    mode: "0644"
+
+- name: Extraire kubeseal
+  ansible.builtin.unarchive:
+    src: /tmp/kubeseal.tgz
+    dest: /tmp
+    remote_src: true
+    creates: /tmp/kubeseal
+
+- name: Installer kubeseal
+  ansible.builtin.copy:
+    src: /tmp/kubeseal
+    dest: /usr/local/bin/kubeseal
+    remote_src: true
+    mode: "0755"
+
+- name: Telecharger la CLI cilium
+  ansible.builtin.get_url:
+    url: "https://github.com/cilium/cilium-cli/releases/latest/download/cilium-linux-{{ bastion_arch }}.tar.gz"
+    dest: /tmp/cilium.tgz
+    mode: "0644"
+
+- name: Extraire la CLI cilium
+  ansible.builtin.unarchive:
+    src: /tmp/cilium.tgz
+    dest: /tmp
+    remote_src: true
+    creates: /tmp/cilium
+
+- name: Installer la CLI cilium
+  ansible.builtin.copy:
+    src: /tmp/cilium
+    dest: /usr/local/bin/cilium
+    remote_src: true
+    mode: "0755"
+
+- name: Nettoyer
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/helm.tgz
+    - /tmp/k9s.tgz
+    - /tmp/trivy.tgz
+    - /tmp/kubeseal.tgz
+    - /tmp/cilium.tgz
+    - "/tmp/linux-{{ bastion_arch }}"
+
+- name: Verifier les binaires
+  ansible.builtin.stat:
+    path: "/usr/local/bin/{{ item }}"
+  loop: [kubectl, helm, k9s, trivy, kubeseal, cilium]
+  register: bins
+
+- name: Echec si un binaire manque
+  ansible.builtin.assert:
+    that: item.stat.exists
+    fail_msg: "{{ item.item }} absent de /usr/local/bin"
+  loop: "{{ bins.results }}"
+  loop_control:
+    label: "{{ item.item }}"

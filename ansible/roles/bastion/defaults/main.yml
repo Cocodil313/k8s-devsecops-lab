@@ -1,0 +1,3 @@
+---
+bastion_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+bastion_trivy_arch: "{{ 'ARM64' if ansible_architecture == 'aarch64' else '64bit' }}"

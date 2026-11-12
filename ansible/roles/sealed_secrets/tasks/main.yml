@@ -1,0 +1,71 @@
+---
+- name: Ajouter le depot Helm Sealed Secrets
+  ansible.builtin.command: helm repo add sealed-secrets https://bitnami.github.io/sealed-secrets --force-update
+  changed_when: false
+
+- name: Rafraichir l index
+  ansible.builtin.command: helm repo update sealed-secrets
+  changed_when: false
+
+- name: Creer le dossier des values
+  ansible.builtin.file:
+    path: /home/vagrant/lab-bootstrap/sealed-secrets
+    state: directory
+    owner: vagrant
+    group: vagrant
+    mode: "0755"
+
+- name: Ecrire les values
+  ansible.builtin.template:
+    src: values.yaml.j2
+    dest: /home/vagrant/lab-bootstrap/sealed-secrets/values.yaml
+    owner: vagrant
+    group: vagrant
+    mode: "0644"
+
+- name: Deployer le controleur
+  ansible.builtin.command: >-
+    helm upgrade sealed-secrets sealed-secrets/sealed-secrets
+    --install=true
+    --namespace {{ sealed_namespace }}
+    {% if sealed_chart_version %}--version {{ sealed_chart_version }}{% endif %}
+    --values /home/vagrant/lab-bootstrap/sealed-secrets/values.yaml
+    --timeout 5m
+  register: helm_out
+  changed_when: "'has been installed' in helm_out.stdout or 'has been upgraded' in helm_out.stdout"
+
+- name: Attendre le controleur
+  ansible.builtin.command: kubectl -n {{ sealed_namespace }} rollout status deploy/sealed-secrets-controller --timeout=300s
+  changed_when: false
+
+# La cle privee est generee au premier demarrage et n est pas reproductible.
+# Sans elle, tous les *.sealed.yaml du depot deviennent indechiffrables.
+- name: Creer le dossier de sauvegarde
+  ansible.builtin.file:
+    path: "{{ sealed_key_backup | dirname }}"
+    state: directory
+    owner: vagrant
+    group: vagrant
+    mode: "0700"
+
+- name: Sauvegarder la cle de scellement
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubectl -n {{ sealed_namespace }} get secret \
+      -l sealedsecrets.bitnami.com/sealed-secrets-key -o yaml \
+      > {{ sealed_key_backup }}
+    chown vagrant:vagrant {{ sealed_key_backup }}
+    chmod 0600 {{ sealed_key_backup }}
+  changed_when: false
+
+- name: Verifier que le backup n est pas vide
+  ansible.builtin.stat:
+    path: "{{ sealed_key_backup }}"
+  register: key
+
+- name: Echec si le backup est invalide
+  ansible.builtin.assert:
+    that:
+      - key.stat.exists
+      - key.stat.size > 1000
+    fail_msg: "Backup de cle invalide ({{ key.stat.size | default(0) }} octets)"

@@ -1,0 +1,166 @@
+---
+- name: Ajouter les depots Helm
+  ansible.builtin.command: "helm repo add {{ item.name }} {{ item.url }} --force-update"
+  loop:
+    - { name: vm,                   url: "https://victoriametrics.github.io/helm-charts/" }
+    - { name: prometheus-community, url: "https://prometheus-community.github.io/helm-charts" }
+    - { name: grafana,              url: "https://grafana.github.io/helm-charts" }
+  changed_when: false
+
+- name: Rafraichir les index
+  ansible.builtin.command: "helm repo update {{ item }}"
+  loop: [vm, prometheus-community, grafana]
+  changed_when: false
+
+- name: Creer le dossier des values
+  ansible.builtin.file:
+    path: /home/vagrant/lab-bootstrap/observability
+    state: directory
+    owner: vagrant
+    group: vagrant
+    mode: "0755"
+
+- name: Ecrire les values VictoriaMetrics
+  ansible.builtin.template:
+    src: vm-values.yaml.j2
+    dest: /home/vagrant/lab-bootstrap/observability/vm-values.yaml
+    owner: vagrant
+    group: vagrant
+    mode: "0644"
+
+- name: Ecrire les values Grafana
+  ansible.builtin.template:
+    src: grafana-values.yaml.j2
+    dest: /home/vagrant/lab-bootstrap/observability/grafana-values.yaml
+    owner: vagrant
+    group: vagrant
+    mode: "0644"
+
+- name: Deployer node-exporter
+  ansible.builtin.command: >-
+    helm upgrade node-exporter prometheus-community/prometheus-node-exporter
+    --install=true
+    --namespace {{ monitoring_namespace }}
+    --create-namespace
+    --set tolerations[0].operator=Exists
+    --timeout 5m
+  register: ne
+  changed_when: "'has been installed' in ne.stdout or 'has been upgraded' in ne.stdout"
+
+- name: Deployer kube-state-metrics
+  ansible.builtin.command: >-
+    helm upgrade ksm prometheus-community/kube-state-metrics
+    --install=true
+    --namespace {{ monitoring_namespace }}
+    --set nodeSelector.role=infra
+    --timeout 5m
+  register: ksm
+  changed_when: "'has been installed' in ksm.stdout or 'has been upgraded' in ksm.stdout"
+
+- name: Deployer VictoriaMetrics
+  ansible.builtin.command: >-
+    helm upgrade vm vm/victoria-metrics-single
+    --install=true
+    --namespace {{ monitoring_namespace }}
+    {% if vm_chart_version %}--version {{ vm_chart_version }}{% endif %}
+    --values /home/vagrant/lab-bootstrap/observability/vm-values.yaml
+    --timeout 10m
+  register: vm
+  changed_when: "'has been installed' in vm.stdout or 'has been upgraded' in vm.stdout"
+
+# Le ConfigMap doit exister AVANT le helm upgrade de Grafana : sinon le pod
+# reste en CreateContainerConfigError (volume monte mais ConfigMap absent).
+- name: Creer le ConfigMap des dashboards
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubectl -n {{ monitoring_namespace }} create configmap grafana-lab-dashboards \
+      --from-file=lab-cluster.json=/home/vagrant/ansible/roles/observability/files/dashboards/lab-cluster.json \
+      --dry-run=client -o yaml | kubectl apply -f -
+  register: cm
+  changed_when: "'configured' in cm.stdout or 'created' in cm.stdout"
+
+- name: Deployer Grafana
+  ansible.builtin.command: >-
+    helm upgrade grafana grafana/grafana
+    --install=true
+    --namespace {{ monitoring_namespace }}
+    {% if grafana_chart_version %}--version {{ grafana_chart_version }}{% endif %}
+    --values /home/vagrant/lab-bootstrap/observability/grafana-values.yaml
+    --timeout 10m
+  register: gf
+  changed_when: "'has been installed' in gf.stdout or 'has been upgraded' in gf.stdout"
+
+- name: Attendre VictoriaMetrics
+  ansible.builtin.shell: |
+    set -o pipefail
+    for kind in statefulset deployment; do
+      kubectl -n {{ monitoring_namespace }} rollout status "$kind/vm-victoria-metrics-single-server" --timeout=60s && exit 0
+    done
+    exit 1
+  register: vmwait
+  until: vmwait.rc == 0
+  retries: 12
+  delay: 10
+  changed_when: false
+
+- name: Attendre Grafana
+  ansible.builtin.command: kubectl -n {{ monitoring_namespace }} rollout status deploy/grafana --timeout=300s
+  changed_when: false
+
+- name: Ecrire l unite de port-forward Grafana
+  ansible.builtin.template:
+    src: pf-grafana.service.j2
+    dest: /etc/systemd/system/pf-grafana.service
+    mode: "0644"
+  register: pf
+
+- name: Recharger systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: pf.changed
+
+- name: Activer le tunnel
+  ansible.builtin.systemd:
+    name: pf-grafana
+    enabled: true
+    state: restarted
+
+- name: Attendre le tunnel
+  ansible.builtin.pause:
+    seconds: 5
+
+- name: Verifier que le port ecoute
+  ansible.builtin.shell: |
+    set -o pipefail
+    ss -tlnp | grep -q ':{{ grafana_host_port }}' && echo OK || echo KO
+  register: check
+  changed_when: false
+
+- name: Echec si le tunnel n ecoute pas
+  ansible.builtin.assert:
+    that: check.stdout is search('OK')
+    fail_msg: "Port {{ grafana_host_port }} absent : journalctl -u pf-grafana -n 30"
+
+# On resout le nom du POD par prefixe : fonctionne que le workload soit un
+# StatefulSet ou un Deployment, et survit aux mises a jour du chart.
+- name: Attendre que VictoriaMetrics ingere des series
+  ansible.builtin.shell: |
+    set -o pipefail
+    POD=$(kubectl -n {{ monitoring_namespace }} get pods --no-headers \
+      | awk '/^vm-victoria-metrics-single/ {print $1; exit}')
+    if [ -z "$POD" ]; then echo "pod introuvable"; exit 1; fi
+    N=$(kubectl -n {{ monitoring_namespace }} exec "$POD" -- \
+      wget -qO- 'http://127.0.0.1:8428/api/v1/query?query=up' | grep -o '"value"' | wc -l)
+    echo "series=$N"
+    [ "$N" -ge 2 ]
+  register: series
+  until: series.rc == 0
+  retries: 20
+  delay: 10
+  changed_when: false
+
+- name: Rapport
+  ansible.builtin.debug:
+    msg:
+      - "Grafana    http://localhost:{{ grafana_host_port }}  (admin / {{ grafana_admin_password }})"
+      - "VictoriaMetrics  {{ series.stdout | trim }}"

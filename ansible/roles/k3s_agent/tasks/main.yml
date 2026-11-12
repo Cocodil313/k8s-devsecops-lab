@@ -1,0 +1,43 @@
+---
+- name: Creer /etc/rancher/k3s
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    mode: "0755"
+
+- name: Ecrire la configuration de l agent
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    mode: "0600"
+  register: agent_cfg
+
+# K3S_URL est exige par le script d installation en mode agent.
+# no_log : le token n apparait pas dans la sortie, meme avec -vvv.
+- name: Installer K3s agent
+  ansible.builtin.shell: |
+    set -o pipefail
+    curl -sfL https://get.k3s.io | \
+      INSTALL_K3S_CHANNEL={{ k3s_channel }} \
+      K3S_URL=https://{{ lab_master_ip }}:6443 \
+      K3S_TOKEN={{ k3s_token }} \
+      sh -s - agent
+  args:
+    executable: /bin/bash
+    creates: /usr/local/bin/k3s
+  register: agent_install
+  no_log: true
+
+- name: Redemarrer k3s-agent si la configuration a change
+  ansible.builtin.systemd:
+    name: k3s-agent
+    state: restarted
+  when:
+    - agent_cfg.changed
+    - not agent_install.changed
+
+- name: Activer et demarrer k3s-agent
+  ansible.builtin.systemd:
+    name: k3s-agent
+    enabled: true
+    state: started

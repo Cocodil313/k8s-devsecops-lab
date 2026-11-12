@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-app
+  namespace: demo
+spec:
+  # NodePort : accessible sur http://localhost:30080. Le port est ouvert sur
+  # TOUS les noeuds, Cilium route vers un pod vivant. Publie sur le master
+  # par le Vagrantfile, donc l URL ne change jamais.
+  type: NodePort
+  selector:
+    app: demo-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: 30080

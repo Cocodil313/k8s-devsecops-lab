@@ -1,0 +1,6 @@
+---
+- name: Prerequis K3s
+  hosts: k8s
+  become: true
+  roles:
+    - k8s_prereqs

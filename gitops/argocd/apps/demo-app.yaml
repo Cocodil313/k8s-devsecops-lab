@@ -1,0 +1,39 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: demo-app
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Cocodil313/k8s-devsecops-lab.git
+    targetRevision: main
+    path: gitops/apps/demo
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo
+  # ignoreDifferences : Argo CD ignore spec.replicas sur le Deployment.
+  # Sans ca, selfHeal revert toute montee du HPA vers la valeur de Git.
+  # RespectIgnoreDifferences est OBLIGATOIRE : sans cette syncOption,
+  # ignoreDifferences ne masque l ecart que dans l affichage, pas au sync.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
